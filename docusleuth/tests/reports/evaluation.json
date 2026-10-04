@@ -1,0 +1,7 @@
+{
+  "status": "blocked",
+  "reasons": [
+    "README_TEST_KEY.md is not attached under the fixture directory",
+    "no supported gold-label manifest found (gold_labels.json, gold.json, or manifest.json)"
+  ]
+}

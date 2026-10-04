@@ -1,0 +1,47 @@
+flowchart LR
+  U[User browser\nNext.js + TypeScript + Tailwind] -->|same-origin UI / SSE| API[FastAPI API\nsecure anonymous session]
+  API --> WS[(Workspace isolation\nPostgreSQL metadata)]
+  API --> UP[Upload validation\nsize + signature + SHA-256]
+  UP --> Q[(Durable ingestion_jobs)]
+  Q --> W[Async ingestion worker]
+  W --> EXT[Real extraction\nPyMuPDF / python-docx / Tesseract]
+  EXT --> P[(document_pages\nOCR confidence + boxes)]
+  EXT --> CH[Structure-aware chunking\noffsets + overlap]
+  CH --> ENT[Strict-schema entities\ndates, amounts, names, IDs, statuses]
+  ENT --> LLM1[Configured LLM\nentity extraction + summary]
+  CH --> EMB[OpenAI text-embedding-3-small\nprovider interface]
+  EMB --> V[(pgvector dense index)]
+  CH --> T[(Postgres tsvector\nfull-text index)]
+  ENT --> E[(document_entities)]
+
+  API --> RET[Hybrid retrieval]
+  RET --> V
+  RET --> T
+  V --> RRF[Reciprocal rank fusion]
+  T --> RRF
+  RRF --> RR[LLM reranking\nstrict citation IDs]
+  RR --> QA[Grounded answer generator\nstreaming + abstention]
+  QA --> LLM2[Configured LLM\nanswering]
+  QA --> CIT[Citations + confidence badge\nHigh / Medium / Low / Not found]
+  CIT --> API
+
+  E --> CMP[Structured comparison\nsame subject + field]
+  CMP --> NLI[Pairwise LLM NLI\nentailment / contradiction / neutral]
+  NLI --> FP[Subject-match false-positive filter]
+  FP --> CF[(conflicts + claims)]
+  CF --> PANEL[Conflict panel\nside-by-side claims; no auto-resolution]
+  PANEL --> API
+
+  API --> HIST[(Question history)]
+  API --> BOARD[(Evidence Board pins)]
+  API --> EXP[Workspace export model]
+  EXP --> MD[Markdown export]
+  EXP --> PDF[PDF export via fpdf2]
+  API --> DEL[Delete-all-data cascade]
+  SCH[Authenticated scheduled recovery] --> Q
+  SCH --> DEL
+
+  classDef store fill:#f7f1e6,stroke:#7a5b2e,color:#241f1a;
+  classDef ai fill:#fff0c9,stroke:#b7791f,color:#241f1a;
+  class V,T,P,E,CF,WS,Q,HIST,BOARD store;
+  class LLM1,LLM2,EMB,RR,NLI ai;
