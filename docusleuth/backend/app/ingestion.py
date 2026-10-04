@@ -237,17 +237,17 @@ async def process_job(job: dict) -> None:
         async with db.transaction() as conn:
             chunk_ids: list[Any] = []
             for chunk in all_chunks:
-    row = await conn.fetchrow(
+               row = await conn.fetchrow(
         '''
         INSERT INTO chunks (document_id, page_id, workspace_id, text_content, page_number,
                             section_heading, start_offset, end_offset, ocr_confidence, embedding)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL) RETURNING id
         ''',
-        job['document_id'], chunk['page_id'], job['workspace_id'], chunk['text'],
-        chunk['page_number'], chunk['section_heading'], chunk['start_offset'],
-        chunk['end_offset'], chunk['ocr_confidence'],
-    )
-    chunk_ids.append(row['id'])
+                    job['document_id'], chunk['page_id'], job['workspace_id'], chunk['text'],
+                    chunk['page_number'], chunk['section_heading'], chunk['start_offset'],
+                    chunk['end_offset'], chunk['ocr_confidence'],
+                )
+                chunk_ids.append(row['id'])
             for entity in entities:
                 raw = str(entity.get('raw_value', '')).strip()
                 if not raw:
