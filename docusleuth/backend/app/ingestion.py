@@ -236,18 +236,18 @@ async def process_job(job: dict) -> None:
         await generate_document_summary(str(job['workspace_id']), str(job['document_id']), entity_source)
         async with db.transaction() as conn:
             chunk_ids: list[Any] = []
-            for chunk, vector in zip(all_chunks, vectors):
-                row = await conn.fetchrow(
-                    '''
-                    INSERT INTO chunks (document_id, page_id, workspace_id, text_content, page_number,
-                                        section_heading, start_offset, end_offset, ocr_confidence, embedding)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::vector) RETURNING id
-                    ''',
-                    job['document_id'], chunk['page_id'], job['workspace_id'], chunk['text'],
-                    chunk['page_number'], chunk['section_heading'], chunk['start_offset'],
-                    chunk['end_offset'], chunk['ocr_confidence'], '[' + ','.join(str(x) for x in vector) + ']',
-                )
-                chunk_ids.append(row['id'])
+            for chunk in all_chunks:
+    row = await conn.fetchrow(
+        '''
+        INSERT INTO chunks (document_id, page_id, workspace_id, text_content, page_number,
+                            section_heading, start_offset, end_offset, ocr_confidence, embedding)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL) RETURNING id
+        ''',
+        job['document_id'], chunk['page_id'], job['workspace_id'], chunk['text'],
+        chunk['page_number'], chunk['section_heading'], chunk['start_offset'],
+        chunk['end_offset'], chunk['ocr_confidence'],
+    )
+    chunk_ids.append(row['id'])
             for entity in entities:
                 raw = str(entity.get('raw_value', '')).strip()
                 if not raw:
