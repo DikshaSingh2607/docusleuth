@@ -9,55 +9,35 @@ def vector_literal(vector: list[float]) -> str:
 
 
 async def retrieve(workspace_id: str, question: str, limit: int = 12) -> list[dict]:
-    vector = vector_literal((await embed_texts([question]))[0])
-    dense = await db.fetch(
-        '''
-        SELECT c.id, c.document_id, c.page_id, c.text_content, c.page_number, c.section_heading,
-               c.ocr_confidence, d.filename, d.document_date_hint, d.version_hint,
-               d.section_citation_only, 1 - (c.embedding <=> $1::vector) AS score
-        FROM chunks c JOIN documents d ON d.id = c.document_id
-        WHERE c.workspace_id = $2 AND c.embedding IS NOT NULL
-        ORDER BY c.embedding <=> $1::vector LIMIT $3
-        ''',
-        vector,
-        workspace_id,
-        limit,
-    )
     keyword = await db.fetch(
         '''
         SELECT c.id, c.document_id, c.page_id, c.text_content, c.page_number, c.section_heading,
                c.ocr_confidence, d.filename, d.document_date_hint, d.version_hint,
                d.section_citation_only,
                ts_rank_cd(c.search_vector, plainto_tsquery('simple', $1)) AS score
-        FROM chunks c JOIN documents d ON d.id = c.document_id
+        FROM chunks c
+        JOIN documents d ON d.id = c.document_id
         WHERE c.workspace_id = $2
-        ORDER BY ts_rank_cd(c.search_vector, plainto_tsquery('simple', $1)) DESC LIMIT $3
+        ORDER BY ts_rank_cd(c.search_vector, plainto_tsquery('simple', $1)) DESC
+        LIMIT $3
         ''',
         question,
         workspace_id,
         limit,
     )
-    merged: dict[str, dict] = {}
-    for rank, row in enumerate(dense, 1):
-        item = dict(row)
-        item['_dense_rank'] = rank
-        item['_rank'] = rank
-        merged[str(row['id'])] = item
-    for rank, row in enumerate(keyword, 1):
-        key = str(row['id'])
-        item = merged.setdefault(key, dict(row) | {'_dense_rank': 999, '_rank': 999})
-        item['_keyword_rank'] = rank
-        item['_rrf'] = 1 / (60 + item.get('_dense_rank', 999)) + 1 / (60 + rank)
-    results = sorted(merged.values(), key=lambda item: item.get('_rrf', 0), reverse=True)[:limit]
+
+    results = [dict(row) for row in keyword]
+
     for index, item in enumerate(results, 1):
         item['_rank'] = index
+        item['_keyword_rank'] = index
+
     try:
         results = await rerank(question, results[:8])
     except Exception:
-        # The evidence is still grounded in the real database ranking if optional reranking fails.
         pass
-    return results
 
+    return results
 
 async def conflicts_for_documents(workspace_id: str, document_ids: list[str]) -> list[dict]:
     if not document_ids:
