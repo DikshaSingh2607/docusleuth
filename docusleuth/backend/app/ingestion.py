@@ -226,7 +226,11 @@ async def process_job(job: dict) -> None:
                     chunk['page_id'] = page_row['id']
                     all_chunks.append(chunk)
         await _status(job['id'], job['document_id'], 'indexing')
-        vectors = await embed_texts([chunk['text'] for chunk in all_chunks]) if all_chunks else []
+
+        # Free deployment fallback:
+        # Store chunks without embeddings and rely on PostgreSQL full-text search.
+        vectors = [None for _ in all_chunks]
+
         entity_source = '\n\n'.join(page.text for page in pages)
         entities = await extract_entities(entity_source) if entity_source else []
         await generate_document_summary(str(job['workspace_id']), str(job['document_id']), entity_source)
