@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 from collections.abc import AsyncIterator
 import httpx
 from .settings import get_settings
