@@ -31,36 +31,90 @@ def _json_schema(name: str, schema: dict) -> dict:
 
 async def embed_texts(texts: list[str]) -> list[list[float]]:
     settings = get_settings()
+
+    if settings.embeddings_provider == 'local':
+        from sentence_transformers import SentenceTransformer
+
+        if not hasattr(embed_texts, '_model'):
+            embed_texts._model = SentenceTransformer(
+                settings.embeddings_model
+            )
+
+        model = embed_texts._model
+
+        vectors = await asyncio.to_thread(
+            model.encode,
+            texts,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        )
+
+        result = [vector.tolist() for vector in vectors]
+
+        if any(len(vector) != settings.embedding_dimensions for vector in result):
+            raise ProviderResponseError(
+                f'Embedding dimension mismatch; expected '
+                f'{settings.embedding_dimensions}.'
+            )
+
+        return result
+
     if not settings.openai_embeddings_api_key:
         raise ProviderSetupError(
-            'Embeddings are not configured. Provide OPENAI_EMBEDDINGS_API_KEY through protected configuration.'
+            'Embeddings are not configured.'
         )
+
     if settings.embeddings_provider != 'openai':
         raise ProviderSetupError(
-            f'Embeddings provider {settings.embeddings_provider!r} is not implemented yet; no local fallback is allowed.'
+            f'Embeddings provider {settings.embeddings_provider!r} '
+            'is not implemented.'
         )
-    payload = {'model': settings.embeddings_model, 'input': texts}
+
+    payload = {
+        'model': settings.embeddings_model,
+        'input': texts,
+    }
+
     async with httpx.AsyncClient(timeout=90) as client:
         response = await client.post(
             'https://api.openai.com/v1/embeddings',
             headers=_headers(settings.openai_embeddings_api_key),
             json=payload,
         )
+
     if response.status_code >= 400:
         raise ProviderResponseError(
-            f'Embeddings provider returned HTTP {response.status_code}: {response.text[:400]}'
+            f'Embeddings provider returned HTTP '
+            f'{response.status_code}: {response.text[:400]}'
         )
+
     body = response.json()
     data = body.get('data')
-    if not isinstance(data, list) or len(data) != len(texts):
-        raise ProviderResponseError('Embeddings provider returned an invalid result.')
-    vectors = [item.get('embedding') for item in sorted(data, key=lambda item: item.get('index', 0))]
-    if any(not isinstance(vector, list) or len(vector) != settings.embedding_dimensions for vector in vectors):
-        raise ProviderResponseError(
-            f'Embedding dimension mismatch; expected {settings.embedding_dimensions}.'
-        )
-    return vectors
 
+    if not isinstance(data, list) or len(data) != len(texts):
+        raise ProviderResponseError(
+            'Embeddings provider returned an invalid result.'
+        )
+
+    vectors = [
+        item.get('embedding')
+        for item in sorted(
+            data,
+            key=lambda item: item.get('index', 0)
+        )
+    ]
+
+    if any(
+        not isinstance(vector, list)
+        or len(vector) != settings.embedding_dimensions
+        for vector in vectors
+    ):
+        raise ProviderResponseError(
+            f'Embedding dimension mismatch; expected '
+            f'{settings.embedding_dimensions}.'
+        )
+
+    return vectors
 
 async def chat_json(system: str, user: str, schema_name: str, schema: dict, max_tokens: int = 1000) -> dict:
     settings = get_settings()
