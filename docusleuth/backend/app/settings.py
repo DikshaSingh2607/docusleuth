@@ -8,9 +8,9 @@ class Settings(BaseSettings):
     database_url: str | None = None
     database_direct_url: str | None = None
     openai_embeddings_api_key: str | None = None
-    embeddings_provider: str = 'openai'
-    embeddings_model: str = 'text-embedding-3-small'
-    embedding_dimensions: int = 1536
+    embeddings_provider: str = 'local'
+    embeddings_model: str = 'sentence-transformers/all-MiniLM-L6-v2'
+    embedding_dimensions: int = 384
     llm_provider: str = 'openai'
     llm_base_url: str = 'https://api.openai.com/v1'
     llm_model: str = 'gpt-4o-mini'
