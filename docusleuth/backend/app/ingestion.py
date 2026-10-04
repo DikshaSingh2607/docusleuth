@@ -207,77 +207,92 @@ async def process_job(job: dict) -> None:
             )
         await _status(job['id'], job['document_id'], 'OCR' if scanned else 'extracting')
         all_chunks: list[dict] = []
-        async with db.transaction() as conn:
-            await conn.execute('DELETE FROM document_pages WHERE document_id = $1', job['document_id'])
-            await conn.execute('DELETE FROM chunks WHERE document_id = $1', job['document_id'])
-            await conn.execute('DELETE FROM document_entities WHERE document_id = $1', job['document_id'])
-            for page in pages:
-                page_row = await conn.fetchrow(
-                    '''
-                    INSERT INTO document_pages (document_id, workspace_id, page_number, section_heading,
-                                                text_content, ocr_confidence, ocr_boxes)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id
-                    ''',
-                    job['document_id'], job['workspace_id'], page.page_number, page.section_heading,
-                    page.text, page.ocr_confidence,
-                    json.dumps(page.ocr_boxes) if page.ocr_boxes else None,
-                )
-                for chunk in chunk_page(page):
-                    chunk['page_id'] = page_row['id']
-                    all_chunks.append(chunk)
-        await _status(job['id'], job['document_id'], 'indexing')
+async with db.transaction() as conn:
+    chunk_ids: list[Any] = []
 
-        # Free deployment fallback:
-        # Store chunks without embeddings and rely on PostgreSQL full-text search.
-        vectors = [None for _ in all_chunks]
+    for chunk in all_chunks:
+        row = await conn.fetchrow(
+            '''
+            INSERT INTO chunks (
+                document_id, page_id, workspace_id, text_content, page_number,
+                section_heading, start_offset, end_offset, ocr_confidence, embedding
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL)
+            RETURNING id
+            ''',
+            job['document_id'],
+            chunk['page_id'],
+            job['workspace_id'],
+            chunk['text'],
+            chunk['page_number'],
+            chunk['section_heading'],
+            chunk['start_offset'],
+            chunk['end_offset'],
+            chunk['ocr_confidence'],
+        )
 
-        entity_source = '\n\n'.join(page.text for page in pages)
-        entities = await extract_entities(entity_source) if entity_source else []
-        await generate_document_summary(str(job['workspace_id']), str(job['document_id']), entity_source)
-        async with db.transaction() as conn:
-            chunk_ids: list[Any] = []
-            for chunk in all_chunks:
-               row = await conn.fetchrow(
-        '''
-        INSERT INTO chunks (document_id, page_id, workspace_id, text_content, page_number,
-                            section_heading, start_offset, end_offset, ocr_confidence, embedding)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULL) RETURNING id
-        ''',
-                    job['document_id'], chunk['page_id'], job['workspace_id'], chunk['text'],
-                    chunk['page_number'], chunk['section_heading'], chunk['start_offset'],
-                    chunk['end_offset'], chunk['ocr_confidence'],
-                )
-                chunk_ids.append(row['id'])
-            for entity in entities:
-                raw = str(entity.get('raw_value', '')).strip()
-                if not raw:
-                    continue
-                match = next((i for i, chunk in enumerate(all_chunks) if raw.lower() in chunk['text'].lower()), None)
-                chunk_id = chunk_ids[match] if match is not None else None
-                page_number = all_chunks[match]['page_number'] if match is not None else None
-                subject = str(entity.get('subject', '')).strip()
-                normalized_subject = re.sub(r'\s+', ' ', subject.casefold())
-                normalized_value = re.sub(r'\s+', ' ', str(entity.get('normalized_value', raw)).casefold()).strip()
-                if subject and normalized_value:
-                    await conn.execute(
-                        '''
-                        INSERT INTO document_entities (workspace_id, document_id, chunk_id, page_number,
-                                                       entity_type, subject, normalized_subject, raw_value,
-                                                       normalized_value, confidence)
-                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-                        ''',
-                        job['workspace_id'], job['document_id'], chunk_id, page_number,
-                        entity.get('entity_type', 'status'), subject, normalized_subject, raw,
-                        normalized_value, float(entity.get('confidence', 0.5)),
-                    )
+        chunk_ids.append(row['id'])
+
+    for entity in entities:
+        raw = str(entity.get('raw_value', '')).strip()
+        if not raw:
+            continue
+
+        match = next(
+            (
+                i
+                for i, chunk in enumerate(all_chunks)
+                if raw.lower() in chunk['text'].lower()
+            ),
+            None,
+        )
+
+        chunk_id = chunk_ids[match] if match is not None else None
+        page_number = (
+            all_chunks[match]['page_number']
+            if match is not None
+            else None
+        )
+
+        subject = str(entity.get('subject', '')).strip()
+        normalized_subject = re.sub(r'\s+', ' ', subject.casefold())
+        normalized_value = re.sub(
+            r'\s+',
+            ' ',
+            str(entity.get('normalized_value', raw)).casefold(),
+        ).strip()
+
+        if subject and normalized_value:
             await conn.execute(
-                "UPDATE documents SET status = 'ready', updated_at = now() WHERE id = $1",
+                '''
+                INSERT INTO document_entities (
+                    workspace_id, document_id, chunk_id, page_number,
+                    entity_type, subject, normalized_subject, raw_value,
+                    normalized_value, confidence
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                ''',
+                job['workspace_id'],
                 job['document_id'],
+                chunk_id,
+                page_number,
+                entity.get('entity_type', 'status'),
+                subject,
+                normalized_subject,
+                raw,
+                normalized_value,
+                float(entity.get('confidence', 0.5)),
             )
-            await conn.execute(
-                "UPDATE ingestion_jobs SET status = 'ready', updated_at = now(), lease_until = NULL WHERE id = $1",
-                job['id'],
-            )
+
+    await conn.execute(
+        "UPDATE documents SET status = 'ready', updated_at = now() WHERE id = $1",
+        job['document_id'],
+    )
+
+    await conn.execute(
+        "UPDATE ingestion_jobs SET status = 'ready', updated_at = now(), lease_until = NULL WHERE id = $1",
+        job['id'],
+    )
         await detect_for_document(str(job['workspace_id']), str(job['document_id']))
     except Exception as exc:
         await _status(job['id'], job['document_id'], 'failed', str(exc)[:1200])
